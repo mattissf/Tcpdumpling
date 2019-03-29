@@ -1,11 +1,9 @@
 import argparse
 import logging
 import multiprocessing
-import time
-import ctypes
+import subprocess
 import signal
-
-import paramiko
+import shlex
 
 
 class RemoteTcpDump(multiprocessing.Process):
@@ -23,17 +21,20 @@ class RemoteTcpDump(multiprocessing.Process):
         logging.basicConfig(level=self.log_level)
 
         def sigint_handler(signal, frame):
-            logging.debug(f"{self.remote_host}: Child received CTRL+C")
+            logging.debug(f"{self.remote_host}: Child received CTRL+C - ignored because of poison pill method")
 
         signal.signal(signal.SIGINT, sigint_handler)
 
-        while True:
-            if self.poison_pill.is_set():
-                logging.debug(f"{self.remote_host}: Received poison pill, exiting")
-                break
+        process = subprocess.Popen(shlex.split("FOR /L %N IN () DO @echo Oops & timeout /T 1 /NOBREAK"), shell=True,
+                                   stdout=subprocess.PIPE)
 
-            print(f'{self.remote_host}: Just echoing something here')
-            time.sleep(3)
+        while not self.poison_pill.is_set():
+            self.stdout_pipe.send_bytes(process.stdout.readline())
+
+        if self.poison_pill.is_set():
+            logging.debug(f"{self.remote_host}: Received poison pill, exiting")
+            self.stdout_pipe.close()
+            process.terminate()
 
 
 def set_up_logging(cli_arguments):
@@ -73,9 +74,10 @@ def main(cli_arguments):
 
     signal.signal(signal.SIGINT, keyboard_interrupt_handler)
 
-    while ctrl_c_received is False:
-        print("Parent: In its main loop doing stuff")
-        time.sleep(1)
+    while not ctrl_c_received:
+        for process, child_stdout, _, _ in remote_processes:
+            if child_stdout.poll():
+                print(f'Parent: got line from {process.remote_host}: {child_stdout.recv_bytes()}')
 
     for process, _, _, _ in remote_processes:
         process.join()
