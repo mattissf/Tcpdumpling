@@ -9,7 +9,7 @@ import paramiko
 
 
 class RemoteTcpDump(multiprocessing.Process):
-    def __init__(self, remote_host, stdout_pipe, poison_pill, username=None, password=None):
+    def __init__(self, remote_host, stdout_pipe, poison_pill, username=None, password=None, log_level=logging.INFO):
         super(RemoteTcpDump, self).__init__()
         self.daemon = True
         self.remote_host = remote_host
@@ -17,16 +17,19 @@ class RemoteTcpDump(multiprocessing.Process):
         self.password = password
         self.stdout_pipe = stdout_pipe
         self.poison_pill = poison_pill
+        self.log_level = log_level
 
     def run(self):
+        logging.basicConfig(level=self.log_level)
+
         def sigint_handler(signal, frame):
-            print(f"{self.remote_host}: Child received CTRL+C")
+            logging.debug(f"{self.remote_host}: Child received CTRL+C")
 
         signal.signal(signal.SIGINT, sigint_handler)
 
         while True:
             if self.poison_pill.is_set():
-                print(f"{self.remote_host}: Received poison pill, exiting")
+                logging.debug(f"{self.remote_host}: Received poison pill, exiting")
                 break
 
             print(f'{self.remote_host}: Just echoing something here')
@@ -47,22 +50,21 @@ def set_up_logging(cli_arguments):
 
 
 def main(cli_arguments):
-    print(cli_arguments)
-
     set_up_logging(cli_arguments)
     remote_processes = []
 
     for host in cli_arguments.hosts:
         parent_connection, child_connection = multiprocessing.Pipe()
         poison_pill = multiprocessing.Event()
-        process = RemoteTcpDump(host, child_connection, poison_pill)
+        process = RemoteTcpDump(host, child_connection, poison_pill,
+                                log_level=logging.DEBUG if cli_arguments.debug else logging.INFO)
         remote_processes.append((process, parent_connection, child_connection, poison_pill))
         process.start()
 
     ctrl_c_received = False
 
     def keyboard_interrupt_handler(signal, frame):
-        print("Parent: Received CTRL+C, stopping jobs")
+        logging.debug("Parent: Received CTRL+C, stopping jobs")
         nonlocal ctrl_c_received
         ctrl_c_received = True
 
