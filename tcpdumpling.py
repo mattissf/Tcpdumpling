@@ -1,6 +1,7 @@
 import argparse
 import logging
 import multiprocessing
+import multiprocessing.connection
 import getpass
 import warnings
 from functools import partial
@@ -9,11 +10,13 @@ import paramiko
 
 
 class RemoteTcpDump(multiprocessing.Process):
+    stdout_pipe: multiprocessing.connection.Connection
+
     def __init__(
             self,
             tcpdump_filter: str,
             remote_host: str,
-            stdout_pipe: multiprocessing.Pipe,
+            stdout_pipe: multiprocessing.connection.Connection,
             username: str = None,
             password: str = None,
             pem_file: str = None,
@@ -28,7 +31,7 @@ class RemoteTcpDump(multiprocessing.Process):
 
         :param tcpdump_filter: a valid tcpdump filter
         :param remote_host: the machine this process should connect to
-        :param stdout_pipe: a multiprocess Pipe that is used to transfer output from tcpdump
+        :param stdout_pipe: a multiprocess.connection.Connection that is used to transfer output from tcpdump
         :param username: ssh username
         :param password: optional ssh password
         :param pem_file: optional ssh pemfile
@@ -115,10 +118,15 @@ class RemoteTcpDump(multiprocessing.Process):
     def info(self, msg: str) -> None:
         logging.info(f"{self.remote_host}: {msg}")
 
-    def warning(self, msg: str):
+    def warning(self, msg: str) -> None:
         logging.warning(f"{self.remote_host}: {msg}")
 
     def run(self) -> None:
+        '''
+        Main loop of the remote process
+
+        :return: None
+        '''
         logging.basicConfig(level=self.log_level)
 
         # Paramiko module outputted a lot of deprecation warnings to CLI
@@ -131,12 +139,16 @@ class RemoteTcpDump(multiprocessing.Process):
         while not stdout.channel.exit_status_ready() or stdout.channel.recv_ready():
             try:
                 if self.pcap:
-                    for chunk in stdout.read(1024):
-                        self.stdout_pipe.send_bytes(bytes(chunk))
+                    for chunk in stdout.read(1):
+                        # I have no idea why I have to do this - but it works.
+                        # For some reason the read(1) returns an integer
+                        byte = int(chunk).to_bytes(1, byteorder='big')
+                        self.stdout_pipe.send_bytes(byte)
                 else:
                     line = b""
                     # This was a bit tricky, because I want to flush one line at a time to the parent process.
-                    # To trigger on the newline sentinel, I have to read every single byte. Probably slow.. But it works.
+                    # To trigger on the newline sentinel, I have to read every single byte.
+                    # Probably slow.. But it works like above.
                     for byte in iter(partial(stdout.read, 1), b"\n"):
                         line += byte
 
@@ -197,9 +209,8 @@ def main(cli_arguments: argparse.Namespace) -> None:
         try:
             for process, parent_pipe, _ in remote_processes:
                 if cli_arguments.pcap:
-
-                    for chunk in parent_pipe.recv_bytes(1024):
-                        pcap_file.write(bytes(chunk))
+                    for byte in parent_pipe.recv_bytes(1):
+                        pcap_file.write(int(byte).to_bytes(1, byteorder='big'))
                         pcap_file.flush()
                 else:
                     for line in parent_pipe.recv_bytes().decode("utf-8").split("\n"):
