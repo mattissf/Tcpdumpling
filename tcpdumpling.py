@@ -1,12 +1,16 @@
 import argparse
+import io
 import logging
 import multiprocessing
 import multiprocessing.connection
 import getpass
 import warnings
+import copy
+
 from functools import partial
 
 import paramiko
+from scapy.all import rdpcap
 
 
 class RemoteTcpDump(multiprocessing.Process):
@@ -134,7 +138,10 @@ class RemoteTcpDump(multiprocessing.Process):
 
         ssh_client = self.connect()
 
+        stdout: paramiko.ChannelFile
         _, stdout, stderr = ssh_client.exec_command(self.command)
+
+        four_bytes = b''
 
         while not stdout.channel.exit_status_ready() or stdout.channel.recv_ready():
             try:
@@ -143,7 +150,10 @@ class RemoteTcpDump(multiprocessing.Process):
                         # I have no idea why I have to do this - but it works.
                         # For some reason the read(1) returns an integer
                         byte = int(chunk).to_bytes(1, byteorder='big')
-                        self.stdout_pipe.send_bytes(byte)
+                        four_bytes += byte
+                        if len(four_bytes) == 4:
+                            self.stdout_pipe.send_bytes(four_bytes)
+                            four_bytes = b''
                 else:
                     line = b""
                     # This was a bit tricky, because I want to flush one line at a time to the parent process.
@@ -201,17 +211,26 @@ def main(cli_arguments: argparse.Namespace) -> None:
         # Close it here so that it is closed on both ends
         child_pipe.close()
 
-    pcap_file = False
-    if cli_arguments.pcap:
-        pcap_file = open(cli_arguments.pcap, "wb")
+    pcap_file = io.BytesIO()
+    previous_file_pos = 0
 
     while True:
         try:
             for process, parent_pipe, _ in remote_processes:
                 if cli_arguments.pcap:
-                    for byte in parent_pipe.recv_bytes(1):
-                        pcap_file.write(int(byte).to_bytes(1, byteorder='big'))
-                        pcap_file.flush()
+                    for integer in parent_pipe.recv_bytes():
+                        byte = int(integer).to_bytes(1, byteorder='big')
+                        pcap_file.write(byte)
+
+                        current_file_pos = pcap_file.tell()
+
+                        if (current_file_pos - previous_file_pos) > 128:
+                            previous_file_pos = current_file_pos
+
+                            pcap_file_copy = copy.deepcopy(pcap_file)
+
+                            pcap_file_copy.seek(0)
+                            print(rdpcap(pcap_file_copy).summary())
                 else:
                     for line in parent_pipe.recv_bytes().decode("utf-8").split("\n"):
                         print(f'{process.remote_host}: {line}')
