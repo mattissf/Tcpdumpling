@@ -13,7 +13,7 @@ class RemoteTcpDump(multiprocessing.Process):
             self,
             tcpdump_filter: str,
             remote_host: str,
-            stdout_pipe: multiprocessing.connection.Connection,
+            stdout_pipe: multiprocessing.Pipe,
             username: str = None,
             password: str = None,
             pem_file: str = None,
@@ -57,6 +57,11 @@ class RemoteTcpDump(multiprocessing.Process):
             self.password = getpass.getpass(f"{self.remote_host}: Please enter password: ", )
 
     def connect(self) -> paramiko.SSHClient:
+        """
+        Helper method to connect to a remote host
+
+        :rtype: paramiko.SSHClient
+        """
         ssh_client = paramiko.SSHClient()
         ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
@@ -76,6 +81,16 @@ class RemoteTcpDump(multiprocessing.Process):
         return ssh_client
 
     def build_command(self, tcpdump_filter: str, ssh_safety: bool, sudo: bool, echo_only: bool, pcap: bool) -> str:
+        """
+        Helper method to build the command that should run on the remote host
+
+        :param tcpdump_filter:
+        :param ssh_safety:
+        :param sudo:
+        :param echo_only:
+        :param pcap:
+        :return: str
+        """
         command = f"tcpdump -n"
 
         if pcap:
