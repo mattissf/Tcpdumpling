@@ -11,18 +11,33 @@ import paramiko
 class RemoteTcpDump(multiprocessing.Process):
     def __init__(
             self,
-            tcpdump_filter,
-            remote_host,
-            stdout_pipe,
-            username=None,
-            password=None,
-            pem_file=None,
-            ssh_safety=True,
-            sudo=False,
-            echo_only=False,
-            pcap=False,
-            log_level=logging.INFO
-    ):
+            tcpdump_filter: str,
+            remote_host: str,
+            stdout_pipe: multiprocessing.connection.Connection,
+            username: str = None,
+            password: str = None,
+            pem_file: str = None,
+            ssh_safety: bool = True,
+            sudo: bool = False,
+            echo_only: bool = False,
+            pcap: bool = False,
+            log_level: int = logging.INFO
+    ) -> None:
+        """
+        Class that encapsulates logic to perform tcpdump on a remote machine
+
+        :param tcpdump_filter: a valid tcpdump filter
+        :param remote_host: the machine this process should connect to
+        :param stdout_pipe: a multiprocess Pipe that is used to transfer output from tcpdump
+        :param username: ssh username
+        :param password: optional ssh password
+        :param pem_file: optional ssh pemfile
+        :param ssh_safety: settings this to 'False' will capture SSH traffice
+        :param sudo: prepends command with 'sudo' - expects no password prompt
+        :param echo_only: prepends command with 'echo' - dryrun
+        :param pcap: captures to pcap file instead of stdout
+        :param log_level: adjust log level, default logging.INFO
+        """
         super(RemoteTcpDump, self).__init__()
         self.daemon = True
 
@@ -41,7 +56,7 @@ class RemoteTcpDump(multiprocessing.Process):
         if not self.pem_file and not self.password:
             self.password = getpass.getpass(f"{self.remote_host}: Please enter password: ", )
 
-    def connect(self):
+    def connect(self) -> paramiko.SSHClient:
         ssh_client = paramiko.SSHClient()
         ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
@@ -60,7 +75,7 @@ class RemoteTcpDump(multiprocessing.Process):
 
         return ssh_client
 
-    def build_command(self, tcpdump_filter, ssh_safety, sudo, echo_only, pcap):
+    def build_command(self, tcpdump_filter: str, ssh_safety: bool, sudo: bool, echo_only: bool, pcap: bool) -> str:
         command = f"tcpdump -n"
 
         if pcap:
@@ -79,16 +94,16 @@ class RemoteTcpDump(multiprocessing.Process):
 
         return command
 
-    def debug(self, msg):
+    def debug(self, msg: str) -> None:
         logging.debug(f"{self.remote_host}: {msg}")
 
-    def info(self, msg):
+    def info(self, msg: str) -> None:
         logging.info(f"{self.remote_host}: {msg}")
 
-    def warning(self, msg):
+    def warning(self, msg: str):
         logging.warning(f"{self.remote_host}: {msg}")
 
-    def run(self):
+    def run(self) -> None:
         logging.basicConfig(level=self.log_level)
 
         # Paramiko module outputted a lot of deprecation warnings to CLI
@@ -128,7 +143,12 @@ class RemoteTcpDump(multiprocessing.Process):
         self.stdout_pipe.close()
 
 
-def main(cli_arguments):
+def main(cli_arguments: argparse.Namespace) -> None:
+    """
+    Connects to multiple hosts and reads the output from their tcpdump processes
+
+    :param cli_arguments: arguments passed to the main function
+    """
     log_level = logging.DEBUG if cli_arguments.debug else logging.INFO
     logging.basicConfig(level=log_level)
     remote_processes = []
@@ -181,7 +201,7 @@ def main(cli_arguments):
         pcap_file.close()
 
 
-def process_cli_arguments():
+def process_cli_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="TCP Dumpling - Connect to multiple hosts and run tcpdump",
         epilog="Author: Mattis Stordalen Flister (mattis.stordalen.flister@gmail.com)",
