@@ -11,6 +11,7 @@ from functools import partial
 
 import paramiko
 from scapy.all import rdpcap
+from scapy.utils import PcapReader
 
 
 class RemoteTcpDump(multiprocessing.Process):
@@ -212,7 +213,9 @@ def main(cli_arguments: argparse.Namespace) -> None:
         child_pipe.close()
 
     pcap_file = io.BytesIO()
-    previous_file_pos = 0
+    pcap_reader = None
+    pcap_file_header_length = 24
+    pcap_reader_exit_pos = False
 
     while True:
         try:
@@ -221,16 +224,30 @@ def main(cli_arguments: argparse.Namespace) -> None:
                     for integer in parent_pipe.recv_bytes():
                         byte = int(integer).to_bytes(1, byteorder='big')
                         pcap_file.write(byte)
+                        pcap_file_write_pos = pcap_file.tell()
 
-                        current_file_pos = pcap_file.tell()
+                        # Read the headers and start the pcap reader instance
+                        if pcap_file_write_pos > pcap_file_header_length and not pcap_reader_exit_pos:
+                            pcap_file.seek(0)
+                            pcap_reader = PcapReader(pcap_file)
 
-                        if (current_file_pos - previous_file_pos) > 128:
-                            previous_file_pos = current_file_pos
+                            # Keep this for later
+                            pcap_reader_exit_pos = pcap_file.tell()
 
-                            pcap_file_copy = copy.deepcopy(pcap_file)
+                        if pcap_reader_exit_pos:
+                            # Put the file in state that pcap reader expects
+                            pcap_file.seek(pcap_reader_exit_pos)
 
-                            pcap_file_copy.seek(0)
-                            print(rdpcap(pcap_file_copy).summary())
+                            packet = pcap_reader.read_packet()
+
+                            if packet:
+                                # Only on successful packet, store position for next iteration
+                                pcap_reader_exit_pos = pcap_file.tell()
+                                print(packet.time)
+
+                        # Return to original write position for next iteration
+                        pcap_file.seek(pcap_file_write_pos)
+
                 else:
                     for line in parent_pipe.recv_bytes().decode("utf-8").split("\n"):
                         print(f'{process.remote_host}: {line}')
